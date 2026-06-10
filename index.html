@@ -102,8 +102,9 @@
   <div class="login">
     <div class="trophy">🏆</div>
     <h1>Bolão <span style="color:var(--gold)">Copa 2026</span></h1>
-    <p>Digite seu nome para começar a palpitar.</p>
+    <p>Digite seu nome e um PIN de 4 dígitos. Guarde o PIN: é ele que protege seus palpites.</p>
     <input id="nameInput" placeholder="Seu nome" maxlength="40" autocomplete="off">
+    <input id="pinInput" placeholder="PIN de 4 dígitos" maxlength="4" inputmode="numeric" autocomplete="off">
     <button class="btn btn-gold" onclick="doLogin()">Entrar</button>
     <p id="loginMsg" style="color:var(--bad);font-size:13px;min-height:18px"></p>
   </div>
@@ -290,22 +291,26 @@ async function initSb(){
 /* ---------------- LOGIN ---------------- */
 async function doLogin(){
   const name=document.getElementById('nameInput').value.trim();
+  const pin=document.getElementById('pinInput').value.trim();
   const msg=document.getElementById('loginMsg');
   if(!name){msg.textContent='Digite seu nome.';return;}
+  if(!/^\d{4}$/.test(pin)){msg.textContent='Digite um PIN de 4 dígitos.';return;}
   if(!sb && !(await initSb())) return;
   msg.textContent='Entrando...';
-  // carrega config
   let {data:cfg}=await sb.from('app_config').select('*').eq('id',1).single();
   CFG=cfg||{}; lockAt=CFG.lock_at;
-  // procura participante
-  let {data:exist}=await sb.from('participants').select('*').ilike('name',name).maybeSingle();
-  if(exist){ ME=exist; }
-  else{
-    if(locked()){msg.textContent='A Copa já começou — novos cadastros estão encerrados.';return;}
-    let {data:novo,error}=await sb.from('participants').insert({name}).select().single();
-    if(error){msg.textContent='Erro ao cadastrar: '+error.message;return;}
-    ME=novo;
+  const {data,error}=await sb.rpc('entrar',{p_name:name,p_pin:pin});
+  if(error){
+    const m=error.message||'';
+    if(m.includes('PIN_INCORRETO'))msg.textContent='PIN incorreto para esse nome.';
+    else if(m.includes('COPA_INICIADA'))msg.textContent='A Copa já começou — novos cadastros encerrados.';
+    else if(m.includes('PIN_INVALIDO'))msg.textContent='O PIN deve ter 4 dígitos.';
+    else msg.textContent='Erro ao entrar: '+m;
+    return;
   }
+  const row=data&&data[0];
+  if(!row){msg.textContent='Não foi possível entrar.';return;}
+  ME={id:row.pid,name:row.pname};
   localStorage.setItem('bolao_me',ME.id);
   await enterApp();
 }
@@ -314,7 +319,7 @@ async function tryAutoLogin(){
   const id=localStorage.getItem('bolao_me'); if(!id) return;
   let {data:cfg}=await sb.from('app_config').select('*').eq('id',1).single();
   CFG=cfg||{}; lockAt=CFG.lock_at;
-  let {data}=await sb.from('participants').select('*').eq('id',id).maybeSingle();
+  let {data}=await sb.from('participants').select('id,name').eq('id',id).maybeSingle();
   if(data){ME=data;await enterApp();}
 }
 function logout(){localStorage.removeItem('bolao_me');location.reload();}
@@ -330,7 +335,7 @@ async function enterApp(){
 
 async function loadAll(){
   const [p,pr,gp,sp,rs]=await Promise.all([
-    sb.from('participants').select('*'),
+    sb.from('participants').select('id,name'),
     sb.from('predictions').select('*'),
     sb.from('group_predictions').select('*'),
     sb.from('special_predictions').select('*'),
@@ -687,7 +692,8 @@ async function saveOfficialSpecial(){
 /* ============================================================
    START
 ============================================================ */
-document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('pinInput').focus();});
+document.getElementById('pinInput').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 tryAutoLogin();
 </script>
 </body>
