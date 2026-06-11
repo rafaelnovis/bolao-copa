@@ -333,27 +333,55 @@ async function enterApp(){
   renderGrupos(); renderClassif(); renderEspeciais(); renderMata(); renderRanking();
 }
 
+// busca TODAS as linhas de uma tabela em páginas de 1000 (o Supabase limita a 1000 por requisição)
+async function fetchAllRows(table){
+  let out=[], from=0; const size=1000;
+  while(true){
+    const {data,error}=await sb.from(table).select('*').range(from,from+size-1);
+    if(error||!data||!data.length) break;
+    out=out.concat(data);
+    if(data.length<size) break;
+    from+=size;
+  }
+  return out;
+}
 async function loadAll(){
-  const [p,pr,gp,sp,rs]=await Promise.all([
+  // carrega SÓ os meus palpites (sempre completos, sem o limite de 1000)
+  const [p,rs,myp,myg,mysp]=await Promise.all([
     sb.from('participants').select('id,name'),
-    sb.from('predictions').select('*'),
-    sb.from('group_predictions').select('*'),
-    sb.from('special_predictions').select('*'),
     sb.from('results').select('*'),
+    sb.from('predictions').select('*').eq('participant_id',ME.id),
+    sb.from('group_predictions').select('*').eq('participant_id',ME.id),
+    sb.from('special_predictions').select('*').eq('participant_id',ME.id),
   ]);
-  allParticipants=p.data||[]; allPreds=pr.data||[]; allGroups=gp.data||[]; allSpecial=sp.data||[];
+  allParticipants=p.data||[];
   officialResults={}; (rs.data||[]).forEach(r=>officialResults[r.match_id]=r);
-  myPreds={}; allPreds.filter(x=>x.participant_id===ME.id).forEach(x=>myPreds[x.match_id]=x);
-  myGroups={}; allGroups.filter(x=>x.participant_id===ME.id).forEach(x=>myGroups[x.grp]=x);
-  mySpecial=allSpecial.find(x=>x.participant_id===ME.id)||{};
+  myPreds={}; (myp.data||[]).forEach(x=>myPreds[x.match_id]=x);
+  myGroups={}; (myg.data||[]).forEach(x=>myGroups[x.grp]=x);
+  mySpecial=(mysp.data&&mysp.data[0])||{};
+  allPreds=[]; allGroups=[]; allSpecial=[]; // dados de todos: carregados sob demanda no Ranking
+}
+async function loadRankingData(){
+  allPreds=await fetchAllRows('predictions');
+  allGroups=await fetchAllRows('group_predictions');
+  allSpecial=await fetchAllRows('special_predictions');
 }
 
-/* ---------------- SALVAR (debounced) ---------------- */
-const timers={};
+/* ---------------- SALVAR (robusto: imediato ao sair do campo + flush ao sair da página) ---------------- */
+const timers={}, pendingFns={};
 function flagSaved(el){const t=el?.closest('.card')?.querySelector('.save-tag')||document.getElementById('saveTagGlobal');if(t){t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1200);}}
-function debounce(key,fn){clearTimeout(timers[key]);timers[key]=setTimeout(fn,500);}
+function toastErro(msg){let t=document.getElementById('toastErr');if(!t){t=document.createElement('div');t.id='toastErr';t.style.cssText='position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#dc2626;color:#fff;padding:10px 16px;border-radius:8px;font-weight:700;font-size:14px;z-index:999;box-shadow:0 4px 14px rgba(0,0,0,.2);transition:opacity .3s';document.body.appendChild(t);}t.textContent='⚠️ '+msg;t.style.opacity='1';clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity='0',3500);}
+function scheduleSave(key,fn,immediate){
+  pendingFns[key]=fn; clearTimeout(timers[key]);
+  if(immediate){delete timers[key]; const f=pendingFns[key]; delete pendingFns[key]; return f&&f();}
+  timers[key]=setTimeout(()=>{const f=pendingFns[key];delete pendingFns[key];delete timers[key];f&&f();},600);
+}
+function flushAll(){Object.keys(pendingFns).forEach(k=>{clearTimeout(timers[k]);const f=pendingFns[k];delete pendingFns[k];delete timers[k];f&&f();});}
+window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushAll();});
+window.addEventListener('pagehide',flushAll);
+window.addEventListener('beforeunload',flushAll);
 
-async function savePred(matchId){
+async function savePred(matchId,immediate){
   if(locked()) return;
   const h=document.getElementById('h_'+matchId), a=document.getElementById('a_'+matchId);
   const adv=document.getElementById('adv_'+matchId);
@@ -361,10 +389,11 @@ async function savePred(matchId){
     home_goals:h.value===''?null:+h.value, away_goals:a.value===''?null:+a.value,
     advance:adv?adv.value||null:null, updated_at:new Date().toISOString()};
   myPreds[matchId]=row;
-  debounce('p'+matchId, async()=>{
-    await sb.from('predictions').upsert(row,{onConflict:'participant_id,match_id'});
-    flagSaved(h); updateGrupoProgress(); if(matchId.startsWith('R')||matchId==='F'||matchId==='3P'){renderMata();}
-  });
+  scheduleSave('p'+matchId, async()=>{
+    const {error}=await sb.from('predictions').upsert(row,{onConflict:'participant_id,match_id'});
+    if(error){toastErro('Não salvou esse placar. Verifique a internet e tente de novo.');return;}
+    flagSaved(h); updateGrupoProgress(); if(matchId[0]==='R'||matchId==='F'||matchId==='3P'){renderMata();}
+  }, immediate);
 }
 async function saveGroup(grp){
   if(locked()) return;
@@ -372,9 +401,9 @@ async function saveGroup(grp){
   const p2=document.getElementById('g2_'+grp).value||null;
   const row={participant_id:ME.id,grp,pos1:p1,pos2:p2,updated_at:new Date().toISOString()};
   myGroups[grp]=row;
-  debounce('g'+grp, async()=>{await sb.from('group_predictions').upsert(row,{onConflict:'participant_id,grp'});flagSaved(document.getElementById('g1_'+grp));});
+  scheduleSave('g'+grp, async()=>{const {error}=await sb.from('group_predictions').upsert(row,{onConflict:'participant_id,grp'});if(error){toastErro('Não salvou. Tente de novo.');return;}flagSaved(document.getElementById('g1_'+grp));}, true);
 }
-async function saveSpecial(){
+async function saveSpecial(immediate){
   if(locked()) return;
   const row={participant_id:ME.id,
     champion:document.getElementById('sp_champ').value||null,
@@ -382,7 +411,7 @@ async function saveSpecial(){
     top_scorer:document.getElementById('sp_top').value.trim()||null,
     updated_at:new Date().toISOString()};
   mySpecial=row;
-  debounce('sp', async()=>{await sb.from('special_predictions').upsert(row,{onConflict:'participant_id'});flagSaved(document.getElementById('sp_champ'));});
+  scheduleSave('sp', async()=>{const {error}=await sb.from('special_predictions').upsert(row,{onConflict:'participant_id'});if(error){toastErro('Não salvou. Tente de novo.');return;}flagSaved(document.getElementById('sp_champ'));}, immediate);
 }
 
 /* ============================================================
@@ -393,7 +422,11 @@ function showTab(t){
   ['grupos','classif','mata','especiais','ranking','admin'].forEach(v=>{
     document.getElementById('view_'+v).classList.toggle('hide',v!==t);
   });
-  if(t==='ranking') renderRanking();
+  if(t==='ranking'){
+    const v=document.getElementById('view_ranking');
+    v.innerHTML='<h2 class="sec">📊 Ranking</h2><p class="hint">Carregando dados de todos os participantes...</p>';
+    loadRankingData().then(renderRanking);
+  }
   if(t==='mata') renderMata();
 }
 
@@ -410,7 +443,7 @@ function renderLockBanner(){
 }
 
 /* ---------- FASE DE GRUPOS ---------- */
-function optScore(id,side,val){return `<input id="${side}_${id}" type="number" min="0" max="20" value="${val??''}" ${locked()?'disabled':''} oninput="savePred('${id}')">`;}
+function optScore(id,side,val){return `<input id="${side}_${id}" type="number" min="0" max="20" value="${val??''}" ${locked()?'disabled':''} oninput="savePred('${id}')" onchange="savePred('${id}',true)" onblur="savePred('${id}',true)">`;}
 function renderGrupos(){
   let prog=`<div style="display:flex;justify-content:space-between;align-items:center"><h2 class="sec">🗓️ Fase de Grupos</h2><span class="save-tag" id="saveTagGlobal2"></span></div>
   <p class="hint">Preencha os placares dos 72 jogos. Salva automaticamente. <b>+25</b> placar exato · <b>+18</b> gols do vencedor · <b>+15</b> vencedor e saldo · <b>+13</b> só o vencedor · empate não exato <b>+15</b>.</p>
@@ -462,9 +495,9 @@ function renderEspeciais(){
   let html=`<h2 class="sec">⭐ Palpites especiais</h2>
   <p class="hint">Campeão <b>+50</b> · Vice <b>+20</b> · Artilheiro <b>+30</b>.</p>
   <div class="card"><div class="card-h">Seus palpites <span class="save-tag">✔ salvo</span></div>
-    <div class="row"><label>🏆 Campeão</label><select id="sp_champ" ${locked()?'disabled':''} onchange="saveSpecial()">${optT(mySpecial.champion)}</select></div>
-    <div class="row"><label>🥈 Vice</label><select id="sp_run" ${locked()?'disabled':''} onchange="saveSpecial()">${optT(mySpecial.runner_up)}</select></div>
-    <div class="row"><label>⚽ Artilheiro</label><input id="sp_top" placeholder="Nome do jogador" value="${mySpecial.top_scorer||''}" ${locked()?'disabled':''} oninput="saveSpecial()" style="padding:8px 10px;border:2px solid var(--line);border-radius:8px;font-size:14px;flex:1;min-width:160px"></div>
+    <div class="row"><label>🏆 Campeão</label><select id="sp_champ" ${locked()?'disabled':''} onchange="saveSpecial(true)">${optT(mySpecial.champion)}</select></div>
+    <div class="row"><label>🥈 Vice</label><select id="sp_run" ${locked()?'disabled':''} onchange="saveSpecial(true)">${optT(mySpecial.runner_up)}</select></div>
+    <div class="row"><label>⚽ Artilheiro</label><input id="sp_top" placeholder="Nome do jogador" value="${mySpecial.top_scorer||''}" ${locked()?'disabled':''} oninput="saveSpecial()" onchange="saveSpecial(true)" onblur="saveSpecial(true)" style="padding:8px 10px;border:2px solid var(--line);border-radius:8px;font-size:14px;flex:1;min-width:160px"></div>
   </div>`;
   document.getElementById('view_especiais').innerHTML=html;
 }
@@ -601,7 +634,7 @@ async function saveResult(mid){
   const adv=document.getElementById('oadv_'+mid);
   const row={match_id:mid,home_goals:h===''?null:+h,away_goals:a===''?null:+a,advance:adv?adv.value||null:null,updated_at:new Date().toISOString()};
   officialResults[mid]=row;
-  debounce('r'+mid, async()=>{await sb.from('results').upsert(row,{onConflict:'match_id'});renderRanking();});
+  scheduleSave('r'+mid, async()=>{await sb.from('results').upsert(row,{onConflict:'match_id'});if(allPreds.length)renderRanking();}, true);
 }
 function renderAdmin(){
   const og=(CFG.official_groups)||{}; const os=(CFG.official_special)||{}; const ko32=CFG.ko32||[];
