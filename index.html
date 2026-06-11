@@ -613,18 +613,28 @@ function renderRanking(){
 }
 
 /* ---------- VER PALPITES DE TODOS (somente leitura, após o início da Copa) ---------- */
-function renderVer(selPid){
+let verMode='jogo';
+function setVerMode(m){verMode=m;renderVer();}
+function renderVer(){
   const v=document.getElementById('view_ver');
-  const lista=allParticipants.slice().sort((a,b)=>a.name.localeCompare(b.name,'pt'));
-  const opts=lista.map(p=>`<option value="${p.id}" ${p.id===selPid?'selected':''}>${p.name}</option>`).join('');
   let html=`<h2 class="sec">👀 Palpites de todos</h2>
-  <p class="hint">Escolha um participante para ver os palpites dele.</p>
-  <div class="card"><div class="row"><label>Participante</label><select onchange="renderVer(this.value)"><option value="">— escolha —</option>${opts}</select></div></div>`;
-  if(selPid){
-    const preds={}; allPreds.filter(x=>x.participant_id===selPid).forEach(x=>preds[x.match_id]=x);
-    const grps={}; allGroups.filter(x=>x.participant_id===selPid).forEach(x=>grps[x.grp]=x);
-    const sp=allSpecial.find(x=>x.participant_id===selPid)||{};
-    const nome=(lista.find(p=>p.id===selPid)||{}).name||'';
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn" style="${verMode==='jogo'?'background:var(--gold);color:#3a2c00':'background:#e6ece7;color:var(--muted)'}" onclick="setVerMode('jogo')">⚽ Por jogo</button>
+    <button class="btn" style="${verMode==='pessoa'?'background:var(--gold);color:#3a2c00':'background:#e6ece7;color:var(--muted)'}" onclick="setVerMode('pessoa')">👤 Por participante</button>
+  </div>`;
+  html+= verMode==='jogo' ? verPorJogo() : verPorPessoa();
+  v.innerHTML=html;
+}
+function verPorPessoa(){
+  const lista=allParticipants.slice().sort((a,b)=>a.name.localeCompare(b.name,'pt'));
+  const sel=window._verPid||'';
+  const opts=lista.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${p.name}</option>`).join('');
+  let html=`<div class="card"><div class="row"><label>Participante</label><select onchange="window._verPid=this.value;renderVer()"><option value="">— escolha —</option>${opts}</select></div></div>`;
+  if(sel){
+    const preds={}; allPreds.filter(x=>x.participant_id===sel).forEach(x=>preds[x.match_id]=x);
+    const grps={}; allGroups.filter(x=>x.participant_id===sel).forEach(x=>grps[x.grp]=x);
+    const sp=allSpecial.find(x=>x.participant_id===sel)||{};
+    const nome=(lista.find(p=>p.id===sel)||{}).name||'';
     html+=`<div class="card"><div class="card-h">⭐ Especiais — ${nome}</div>
       <div class="row"><label>🏆 Campeão</label><b>${sp.champion||'—'}</b></div>
       <div class="row"><label>🥈 Vice</label><b>${sp.runner_up||'—'}</b></div>
@@ -643,7 +653,42 @@ function renderVer(selPid){
       html+=`</div>`;
     });
   }
-  v.innerHTML=html;
+  return html;
+}
+function verPorJogo(){
+  const mid=window._verMid||'';
+  let html=`<div class="card"><div class="row"><label>Jogo</label><select onchange="window._verMid=this.value;renderVer()"><option value="">— escolha o jogo —</option>`;
+  Object.keys(GROUPS).forEach(g=>{
+    html+=`<optgroup label="Grupo ${g}">`;
+    MATCHES.filter(m=>m.g===g).forEach(m=>{
+      html+=`<option value="${m.id}" ${mid===m.id?'selected':''}>${m.d} · ${m.home} x ${m.away}</option>`;
+    });
+    html+=`</optgroup>`;
+  });
+  html+=`</select></div></div>`;
+  if(mid){
+    const info=MATCHES.find(m=>m.id===mid); const r=officialResults[mid];
+    const linhas=allParticipants.map(p=>({name:p.name,pr:allPreds.find(x=>x.participant_id===p.id&&x.match_id===mid)}))
+      .filter(x=>x.pr&&x.pr.home_goals!=null&&x.pr.away_goals!=null);
+    let hw=0,dr=0,aw=0; const cnt={};
+    linhas.forEach(x=>{const h=x.pr.home_goals,a=x.pr.away_goals;if(h>a)hw++;else if(a>h)aw++;else dr++;const k=h+'×'+a;cnt[k]=(cnt[k]||0)+1;});
+    const tot=linhas.length||1;
+    const comum=Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
+    html+=`<div class="card"><div class="card-h">${info.home} × ${info.away}${r?` · oficial ${r.home_goals}×${r.away_goals}`:''}</div>
+      <div class="row" style="font-size:13px;display:block;line-height:1.7">
+        <b>${info.home}</b> vence: ${hw} (${Math.round(hw/tot*100)}%) &nbsp;·&nbsp; Empate: ${dr} (${Math.round(dr/tot*100)}%) &nbsp;·&nbsp; <b>${info.away}</b> vence: ${aw} (${Math.round(aw/tot*100)}%)<br>
+        Placar mais palpitado: <b>${comum?comum[0]:'—'}</b>${comum?` (${comum[1]}x)`:''} &nbsp;·&nbsp; ${tot} palpites no total
+      </div>`;
+    linhas.sort((a,b)=>a.name.localeCompare(b.name,'pt'));
+    linhas.forEach(x=>{
+      const pt=r?pointsGame(x.pr.home_goals,x.pr.away_goals,r.home_goals,r.away_goals):null;
+      html+=`<div class="match"><div class="team home">${x.name}</div>
+        <div class="score" style="font-weight:800;font-size:16px">${x.pr.home_goals} × ${x.pr.away_goals}</div>
+        <div class="team away">${pt!=null?`<span class="pts ${pt?'':'zero'}">${pt} pts</span>`:''}</div></div>`;
+    });
+    html+=`</div>`;
+  }
+  return html;
 }
 
 /* ============================================================
