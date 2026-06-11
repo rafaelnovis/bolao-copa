@@ -128,6 +128,7 @@
     <button data-tab="mata" onclick="showTab('mata')">⚔️ Mata-Mata</button>
     <button data-tab="especiais" onclick="showTab('especiais')">⭐ Especiais</button>
     <button data-tab="ranking" onclick="showTab('ranking')">📊 Ranking</button>
+    <button data-tab="ver" onclick="showTab('ver')">👀 Palpites de todos</button>
     <button data-tab="admin" class="hide" id="adminTab" onclick="showTab('admin')">🔧 Admin</button>
   </nav>
   <main>
@@ -137,6 +138,7 @@
     <div id="view_mata" class="hide"></div>
     <div id="view_especiais" class="hide"></div>
     <div id="view_ranking" class="hide"></div>
+    <div id="view_ver" class="hide"></div>
     <div id="view_admin" class="hide"></div>
   </main>
 </div>
@@ -419,13 +421,22 @@ async function saveSpecial(immediate){
 ============================================================ */
 function showTab(t){
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
-  ['grupos','classif','mata','especiais','ranking','admin'].forEach(v=>{
+  ['grupos','classif','mata','especiais','ranking','ver','admin'].forEach(v=>{
     document.getElementById('view_'+v).classList.toggle('hide',v!==t);
   });
   if(t==='ranking'){
     const v=document.getElementById('view_ranking');
     v.innerHTML='<h2 class="sec">📊 Ranking</h2><p class="hint">Carregando dados de todos os participantes...</p>';
     loadRankingData().then(renderRanking);
+  }
+  if(t==='ver'){
+    const v=document.getElementById('view_ver');
+    if(!locked()){
+      v.innerHTML='<h2 class="sec">👀 Palpites de todos</h2><div class="banner warn">Disponível quando a Copa começar ('+new Date(lockAt).toLocaleString('pt-BR')+'). Até lá, os palpites de cada um ficam privados para ninguém copiar.</div>';
+    }else{
+      v.innerHTML='<h2 class="sec">👀 Palpites de todos</h2><p class="hint">Carregando...</p>';
+      loadRankingData().then(()=>renderVer());
+    }
   }
   if(t==='mata') renderMata();
 }
@@ -509,6 +520,7 @@ function koMatchups(){
   const rounds={};
   rounds.R32 = ko32.map((m,i)=>({id:'R32-'+(i+1),home:m.home||'',away:m.away||''}));
   const winnerOf=(slot)=>{
+    if(!slot) return '';
     const p=myPreds[slot.id]||{};
     if(p.home_goals==null||p.away_goals==null) return '';
     if(p.home_goals>p.away_goals) return slot.home;
@@ -598,6 +610,40 @@ function renderRanking(){
   });
   html+=`</tbody></table></div>`;
   document.getElementById('view_ranking').innerHTML=html;
+}
+
+/* ---------- VER PALPITES DE TODOS (somente leitura, após o início da Copa) ---------- */
+function renderVer(selPid){
+  const v=document.getElementById('view_ver');
+  const lista=allParticipants.slice().sort((a,b)=>a.name.localeCompare(b.name,'pt'));
+  const opts=lista.map(p=>`<option value="${p.id}" ${p.id===selPid?'selected':''}>${p.name}</option>`).join('');
+  let html=`<h2 class="sec">👀 Palpites de todos</h2>
+  <p class="hint">Escolha um participante para ver os palpites dele.</p>
+  <div class="card"><div class="row"><label>Participante</label><select onchange="renderVer(this.value)"><option value="">— escolha —</option>${opts}</select></div></div>`;
+  if(selPid){
+    const preds={}; allPreds.filter(x=>x.participant_id===selPid).forEach(x=>preds[x.match_id]=x);
+    const grps={}; allGroups.filter(x=>x.participant_id===selPid).forEach(x=>grps[x.grp]=x);
+    const sp=allSpecial.find(x=>x.participant_id===selPid)||{};
+    const nome=(lista.find(p=>p.id===selPid)||{}).name||'';
+    html+=`<div class="card"><div class="card-h">⭐ Especiais — ${nome}</div>
+      <div class="row"><label>🏆 Campeão</label><b>${sp.champion||'—'}</b></div>
+      <div class="row"><label>🥈 Vice</label><b>${sp.runner_up||'—'}</b></div>
+      <div class="row"><label>⚽ Artilheiro</label><b>${sp.top_scorer||'—'}</b></div></div>`;
+    Object.keys(GROUPS).forEach(g=>{
+      const gp=grps[g]||{};
+      html+=`<div class="card"><div class="card-h">Grupo ${g} <span style="margin-left:auto;font-size:11px;font-weight:600;color:var(--muted)">1º ${gp.pos1||'—'} · 2º ${gp.pos2||'—'}</span></div>`;
+      MATCHES.filter(m=>m.g===g).forEach(m=>{
+        const p=preds[m.id]||{}; const r=officialResults[m.id];
+        const pt=r?pointsGame(p.home_goals,p.away_goals,r.home_goals,r.away_goals):null;
+        const sc=(p.home_goals!=null&&p.away_goals!=null)?`${p.home_goals} × ${p.away_goals}`:'—';
+        html+=`<div class="match"><div class="team home">${m.home}</div>
+          <div class="score" style="font-weight:800;font-size:16px">${sc}</div>
+          <div class="team away">${m.away}${pt!=null?`<div class="pts ${pt?'':'zero'}">${pt} pts</div>`:''}</div></div>`;
+      });
+      html+=`</div>`;
+    });
+  }
+  v.innerHTML=html;
 }
 
 /* ============================================================
@@ -697,7 +743,7 @@ function officialKoMatchups(){
   // mesma estrutura, mas usando vencedores OFICIAIS
   const ko32=(CFG&&CFG.ko32)||[]; const rounds={};
   rounds.R32=ko32.map((m,i)=>({id:'R32-'+(i+1),home:m.home||'',away:m.away||''}));
-  const win=(slot)=>{const r=officialResults[slot.id];if(!r||r.home_goals==null||r.away_goals==null)return '';if(r.home_goals>r.away_goals)return slot.home;if(r.away_goals>r.home_goals)return slot.away;return r.advance||'';};
+  const win=(slot)=>{if(!slot)return '';const r=officialResults[slot.id];if(!r||r.home_goals==null||r.away_goals==null)return '';if(r.home_goals>r.away_goals)return slot.home;if(r.away_goals>r.home_goals)return slot.away;return r.advance||'';};
   ['R16','QF','SF','F'].forEach((rk,idx)=>{const prev=rounds[['R32','R16','QF','SF'][idx]];const arr=[];for(let i=0;i<prev.length;i+=2){arr.push({id:rk==='F'?'F':rk+'-'+(arr.length+1),home:win(prev[i]),away:win(prev[i+1])});}rounds[rk]=arr;});
   const lose=(slot)=>{const w=win(slot);if(!w)return '';return w===slot.home?slot.away:slot.home;};
   rounds['3P']=[{id:'3P',home:lose(rounds.SF[0]),away:lose(rounds.SF[1])}];
