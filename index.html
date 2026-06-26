@@ -384,7 +384,8 @@ window.addEventListener('pagehide',flushAll);
 window.addEventListener('beforeunload',flushAll);
 
 async function savePred(matchId,immediate){
-  if(locked()) return;
+  const isKO = String(matchId)[0]!=='G';
+  if(isKO){ if(!koOpen(matchId)) return; } else { if(locked()) return; }
   const h=document.getElementById('h_'+matchId), a=document.getElementById('a_'+matchId);
   const adv=document.getElementById('adv_'+matchId);
   const row={participant_id:ME.id,match_id:matchId,
@@ -454,7 +455,10 @@ function renderLockBanner(){
 }
 
 /* ---------- FASE DE GRUPOS ---------- */
-function optScore(id,side,val){return `<input id="${side}_${id}" type="number" min="0" max="20" value="${val??''}" ${locked()?'disabled':''} oninput="savePred('${id}')" onchange="savePred('${id}',true)" onblur="savePred('${id}',true)">`;}
+function optScore(id,side,val,dis){return `<input id="${side}_${id}" type="number" min="0" max="20" value="${val??''}" ${dis?'disabled':''} oninput="savePred('${id}')" onchange="savePred('${id}',true)" onblur="savePred('${id}',true)">`;}
+function koRound(mid){return String(mid).split('-')[0];}
+function koOpenRound(k){const d=(CFG&&CFG.ko_deadlines)||{};return d[k]?(new Date()<new Date(d[k])):false;}
+function koOpen(mid){return koOpenRound(koRound(mid));}
 function renderGrupos(){
   let prog=`<div style="display:flex;justify-content:space-between;align-items:center"><h2 class="sec">🗓️ Fase de Grupos</h2><span class="save-tag" id="saveTagGlobal2"></span></div>
   <p class="hint">Preencha os placares dos 72 jogos. Salva automaticamente. <b>+25</b> placar exato · <b>+18</b> gols do vencedor · <b>+15</b> vencedor e saldo · <b>+13</b> só o vencedor · empate não exato <b>+15</b>.</p>
@@ -468,7 +472,7 @@ function renderGrupos(){
       const pt= r? pointsGame(p.home_goals,p.away_goals,r.home_goals,r.away_goals):null;
       html+=`<div class="match">
         <div class="team home">${m.home}<div class="meta">${m.d} · ${m.h}</div></div>
-        <div class="score">${optScore(m.id,'h',p.home_goals)}<span class="x">×</span>${optScore(m.id,'a',p.away_goals)}</div>
+        <div class="score">${optScore(m.id,'h',p.home_goals,locked())}<span class="x">×</span>${optScore(m.id,'a',p.away_goals,locked())}</div>
         <div class="team away">${m.away}${pt!=null?`<div class="pts ${pt?'':'zero'}">${pt} pts</div>`:''}</div>
       </div>`;
     });
@@ -552,15 +556,18 @@ function renderMata(){
   const list=[...KO_ROUNDS]; list.splice(4,0,THIRD); // insere 3º lugar antes da final
   list.forEach(rd=>{
     const arr=rounds[rd.key]||[];
-    html+=`<div class="card"><div class="card-h">${rd.label} <span class="save-tag">✔ salvo</span></div>`;
+    const aberto=koOpenRound(rd.key);
+    const dl=((CFG&&CFG.ko_deadlines)||{})[rd.key];
+    const status=aberto?`<span style="margin-left:auto;font-size:11px;font-weight:700;color:var(--ok)">aberto até ${new Date(dl).toLocaleString('pt-BR')}</span>`:(dl?`<span style="margin-left:auto;font-size:11px;font-weight:700;color:var(--bad)">palpites fechados</span>`:`<span style="margin-left:auto;font-size:11px;font-weight:600;color:var(--muted)">ainda não liberado</span>`);
+    html+=`<div class="card"><div class="card-h">${rd.label} ${status} <span class="save-tag">✔ salvo</span></div>`;
     arr.forEach(slot=>{
       const p=myPreds[slot.id]||{}; const r=officialResults[slot.id];
       const pt=r?pointsGame(p.home_goals,p.away_goals,r.home_goals,r.away_goals):null;
       const tie=(p.home_goals!=null&&p.away_goals!=null&&p.home_goals===p.away_goals);
-      const advSel=tie&&slot.home&&slot.away?`<select id="adv_${slot.id}" ${locked()?'disabled':''} onchange="savePred('${slot.id}')" style="font-size:12px"><option value="">quem passa?</option><option ${p.advance===slot.home?'selected':''}>${slot.home}</option><option ${p.advance===slot.away?'selected':''}>${slot.away}</option></select>`:`<span style="width:1px"></span>`;
+      const advSel=tie&&slot.home&&slot.away?`<select id="adv_${slot.id}" ${!aberto?'disabled':''} onchange="savePred('${slot.id}')" style="font-size:12px"><option value="">quem passa?</option><option ${p.advance===slot.home?'selected':''}>${slot.home}</option><option ${p.advance===slot.away?'selected':''}>${slot.away}</option></select>`:`<span style="width:1px"></span>`;
       html+=`<div class="kogame">
         <div class="team home">${slot.home||'<i style="color:#aaa">a definir</i>'}</div>
-        <div class="score">${optScore(slot.id,'h',p.home_goals)}<span class="x">×</span>${optScore(slot.id,'a',p.away_goals)}</div>
+        <div class="score">${optScore(slot.id,'h',p.home_goals,!aberto)}<span class="x">×</span>${optScore(slot.id,'a',p.away_goals,!aberto)}</div>
         <div class="team away">${slot.away||'<i style="color:#aaa">a definir</i>'}${pt!=null?`<div class="pts ${pt?'':'zero'}">${pt} pts</div>`:''}</div>
         ${advSel}
       </div>`;
@@ -749,6 +756,16 @@ function renderAdmin(){
   }
   html+=`<div class="row"><button class="btn btn-gold" onclick="saveKo32()">Salvar confrontos</button></div></div>`;
 
+  // prazos de palpite por rodada do mata-mata (abre/fecha cada fase)
+  const kod=(CFG.ko_deadlines)||{};
+  const toLocal=(iso)=>{if(!iso)return '';const d=new Date(iso);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);};
+  html+=`<div class="card"><div class="card-h">⏱️ Prazos de palpite do mata-mata (abrir/fechar)</div>
+  <p class="hint" style="padding:0 14px">Defina até quando cada rodada aceita palpites. Em branco = fechado. Cada rodada é independente (abrir as oitavas não reabre os 32-avos). Fase de grupos e especiais ficam sempre travados.</p>`;
+  [['R32','32-avos'],['R16','Oitavas (16-avos)'],['QF','Quartas'],['SF','Semifinais'],['3P','3º lugar'],['F','Final']].forEach(([k,lbl])=>{
+    html+=`<div class="row"><label>${lbl}</label><input id="kod_${k}" type="datetime-local" value="${toLocal(kod[k])}" style="padding:8px;border:2px solid var(--line);border-radius:8px"><span style="font-size:11px;color:var(--muted)">${kod[k]?(new Date(kod[k])>new Date()?'aberto':'fechado'):'fechado'}</span></div>`;
+  });
+  html+=`<div class="row"><button class="btn btn-gold" onclick="saveKoDeadlines()">Salvar prazos</button></div></div>`;
+
   // mata-mata resultados oficiais
   html+=`<div class="card"><div class="card-h">🏁 Resultados oficiais do mata-mata</div>
   <p class="hint" style="padding:0 14px">Preencha conforme o torneio avança. (Os confrontos reais seguem os resultados oficiais.)</p>`;
@@ -803,6 +820,11 @@ async function saveLock(){
 async function saveKo32(){
   const arr=[];for(let i=0;i<16;i++){arr.push({home:document.getElementById('k_h_'+i).value,away:document.getElementById('k_a_'+i).value});}
   await sb.from('app_config').update({ko32:arr}).eq('id',1);CFG.ko32=arr;renderAdmin();renderMata();alert('Confrontos das 32-avos salvos.');
+}
+async function saveKoDeadlines(){
+  const keys=['R32','R16','QF','SF','3P','F']; const o={};
+  keys.forEach(k=>{const v=document.getElementById('kod_'+k).value; if(v) o[k]=new Date(v).toISOString();});
+  await sb.from('app_config').update({ko_deadlines:o}).eq('id',1);CFG.ko_deadlines=o;renderAdmin();renderMata();alert('Prazos do mata-mata salvos.');
 }
 async function saveOfficialGroups(){
   const o={};Object.keys(GROUPS).forEach(g=>{o[g]={first:document.getElementById('og1_'+g).value,second:document.getElementById('og2_'+g).value};});
