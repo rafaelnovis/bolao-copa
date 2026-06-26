@@ -459,6 +459,8 @@ function optScore(id,side,val,dis){return `<input id="${side}_${id}" type="numbe
 function koRound(mid){return String(mid).split('-')[0];}
 function koOpenRound(k){const d=(CFG&&CFG.ko_deadlines)||{};return d[k]?(new Date()<new Date(d[k])):false;}
 function koOpen(mid){return koOpenRound(koRound(mid));}
+function koRevealed(k){const d=(CFG&&CFG.ko_deadlines)||{};return d[k]?(new Date()>=new Date(d[k])):false;}
+const KO_VIEW=[['R32','32-avos'],['R16','Oitavas'],['QF','Quartas'],['SF','Semifinais'],['3P','3º lugar'],['F','Final']];
 function renderGrupos(){
   let prog=`<div style="display:flex;justify-content:space-between;align-items:center"><h2 class="sec">🗓️ Fase de Grupos</h2><span class="save-tag" id="saveTagGlobal2"></span></div>
   <p class="hint">Preencha os placares dos 72 jogos. Salva automaticamente. <b>+25</b> placar exato · <b>+18</b> gols do vencedor · <b>+15</b> vencedor e saldo · <b>+13</b> só o vencedor · empate não exato <b>+15</b>.</p>
@@ -518,14 +520,15 @@ function renderEspeciais(){
 }
 
 /* ---------- MATA-MATA (bracket personalizado) ---------- */
-function koMatchups(){
-  // R32 definido pelo admin (CFG.ko32 = [{home,away},...16]). Demais rodadas: vencedores previstos por MIM.
+function koMatchups(preds){
+  preds=preds||myPreds;
+  // R32 definido pelo admin (CFG.ko32 = [{home,away},...16]). Demais rodadas: vencedores previstos por cada um.
   const ko32 = (CFG&&CFG.ko32)||[];
   const rounds={};
   rounds.R32 = ko32.map((m,i)=>({id:'R32-'+(i+1),home:m.home||'',away:m.away||''}));
   const winnerOf=(slot)=>{
     if(!slot) return '';
-    const p=myPreds[slot.id]||{};
+    const p=preds[slot.id]||{};
     if(p.home_goals==null||p.away_goals==null) return '';
     if(p.home_goals>p.away_goals) return slot.home;
     if(p.away_goals>p.home_goals) return slot.away;
@@ -659,6 +662,19 @@ function verPorPessoa(){
       });
       html+=`</div>`;
     });
+    const koR=koMatchups(preds);
+    KO_VIEW.forEach(([k,lbl])=>{
+      if(!(CFG&&CFG.ko_deadlines&&CFG.ko_deadlines[k])) return;
+      const rev=koRevealed(k);
+      html+=`<div class="card"><div class="card-h">${lbl}${rev?'':' <span style="margin-left:auto;font-size:11px;font-weight:600;color:var(--muted)">visível após o fechamento</span>'}</div>`;
+      if(rev){(koR[k]||[]).forEach(slot=>{
+        const p=preds[slot.id]||{}; const r=officialResults[slot.id];
+        const pt=r?pointsGame(p.home_goals,p.away_goals,r.home_goals,r.away_goals):null;
+        const sc=(p.home_goals!=null&&p.away_goals!=null)?`${p.home_goals} × ${p.away_goals}`:'—';
+        html+=`<div class="match"><div class="team home">${slot.home||'—'}</div><div class="score" style="font-weight:800;font-size:16px">${sc}</div><div class="team away">${slot.away||'—'}${pt!=null?`<div class="pts ${pt?'':'zero'}">${pt} pts</div>`:''}</div></div>`;
+      });}
+      html+=`</div>`;
+    });
   }
   return html;
 }
@@ -672,8 +688,17 @@ function verPorJogo(){
     });
     html+=`</optgroup>`;
   });
+  KO_VIEW.forEach(([k,lbl])=>{
+    if(!(CFG&&CFG.ko_deadlines&&CFG.ko_deadlines[k])) return;
+    const arr=koMatchups()[k]||[];
+    html+=`<optgroup label="${lbl}">`;
+    arr.forEach((slot,i)=>{const lab=k==='R32'?`${slot.home||'?'} x ${slot.away||'?'}`:`${lbl} - Jogo ${i+1}`;html+=`<option value="${slot.id}" ${mid===slot.id?'selected':''}>${lab}</option>`;});
+    html+=`</optgroup>`;
+  });
   html+=`</select></div></div>`;
   if(mid){
+   if(mid[0]!=='G'){ html+=verJogoKO(mid); }
+   else {
     const info=MATCHES.find(m=>m.id===mid); const r=officialResults[mid];
     const linhas=allParticipants.map(p=>({name:p.name,pr:allPreds.find(x=>x.participant_id===p.id&&x.match_id===mid)}))
       .filter(x=>x.pr&&x.pr.home_goals!=null&&x.pr.away_goals!=null);
@@ -694,7 +719,30 @@ function verPorJogo(){
         <div class="team away">${pt!=null?`<span class="pts ${pt?'':'zero'}">${pt} pts</span>`:''}</div></div>`;
     });
     html+=`</div>`;
+   }
   }
+  return html;
+}
+function verJogoKO(mid){
+  const round=koRound(mid);
+  const lbl=(KO_VIEW.find(x=>x[0]===round)||['','Mata-mata'])[1];
+  if(!koRevealed(round)) return `<div class="banner warn">Os palpites desta rodada ficam visíveis após o fechamento dela.</div>`;
+  const r=officialResults[mid];
+  const linhas=[];
+  allParticipants.forEach(p=>{
+    const pr={}; allPreds.filter(x=>x.participant_id===p.id).forEach(x=>pr[x.match_id]=x);
+    const slot=(koMatchups(pr)[round]||[]).find(s=>s.id===mid);
+    const pred=pr[mid];
+    if(slot&&pred&&pred.home_goals!=null&&pred.away_goals!=null) linhas.push({name:p.name,home:slot.home,away:slot.away,hg:pred.home_goals,ag:pred.away_goals});
+  });
+  let html=`<div class="card"><div class="card-h">${lbl}${r?` · oficial ${r.home_goals}×${r.away_goals}`:''}</div>`;
+  if(!linhas.length) html+=`<div class="row" style="font-size:13px;color:var(--muted)">Ninguém palpitou este jogo.</div>`;
+  linhas.sort((a,b)=>a.name.localeCompare(b.name,'pt'));
+  linhas.forEach(x=>{
+    const pt=r?pointsGame(x.hg,x.ag,r.home_goals,r.away_goals):null;
+    html+=`<div class="kogame"><div class="team home" style="font-size:12px">${x.name}</div><div class="score" style="font-weight:800;font-size:13px">${x.home||'?'} ${x.hg}×${x.ag} ${x.away||'?'}</div><div class="team away">${pt!=null?`<span class="pts ${pt?'':'zero'}">${pt} pts</span>`:''}</div></div>`;
+  });
+  html+=`</div>`;
   return html;
 }
 
