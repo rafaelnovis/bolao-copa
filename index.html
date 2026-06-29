@@ -554,8 +554,8 @@ function renderMata(){
     v.innerHTML=`<h2 class="sec">⚔️ Mata-Mata</h2><div class="banner warn">⏳ Os confrontos das 32-avos ainda não foram definidos. Eles serão liberados pelo organizador após a fase de grupos. Depois disso, o chaveamento avança automaticamente conforme os seus palpites.</div>`;
     return;
   }
-  const rounds=koMatchups();
-  let html=`<h2 class="sec">⚔️ Mata-Mata</h2><p class="hint">O organizador define as 32-avos. As rodadas seguintes montam-se sozinhas a partir dos seus vencedores. Em empate, escolha quem avança. Pontuação igual à da fase de grupos.</p>`;
+  const rounds=officialKoMatchups();
+  let html=`<h2 class="sec">⚔️ Mata-Mata</h2><p class="hint">Os confrontos de cada rodada são os <b>oficiais</b> — surgem conforme o organizador lança os resultados da rodada anterior. Pontuação igual à da fase de grupos.</p>`;
   const list=[...KO_ROUNDS]; list.splice(4,0,THIRD); // insere 3º lugar antes da final
   list.forEach(rd=>{
     const arr=rounds[rd.key]||[];
@@ -567,7 +567,7 @@ function renderMata(){
       const p=myPreds[slot.id]||{}; const r=officialResults[slot.id];
       const pt=r?pointsGame(p.home_goals,p.away_goals,r.home_goals,r.away_goals):null;
       const tie=(p.home_goals!=null&&p.away_goals!=null&&p.home_goals===p.away_goals);
-      const advSel=tie&&slot.home&&slot.away?`<select id="adv_${slot.id}" ${!aberto?'disabled':''} onchange="savePred('${slot.id}')" style="font-size:12px"><option value="">quem passa?</option><option ${p.advance===slot.home?'selected':''}>${slot.home}</option><option ${p.advance===slot.away?'selected':''}>${slot.away}</option></select>`:`<span style="width:1px"></span>`;
+      const advSel=`<span style="width:1px"></span>`;
       html+=`<div class="kogame">
         <div class="team home">${slot.home||'<i style="color:#aaa">a definir</i>'}</div>
         <div class="score">${optScore(slot.id,'h',p.home_goals,!aberto)}<span class="x">×</span>${optScore(slot.id,'a',p.away_goals,!aberto)}</div>
@@ -662,7 +662,7 @@ function verPorPessoa(){
       });
       html+=`</div>`;
     });
-    const koR=koMatchups(preds);
+    const koR=officialKoMatchups();
     KO_VIEW.forEach(([k,lbl])=>{
       if(!(CFG&&CFG.ko_deadlines&&CFG.ko_deadlines[k])) return;
       const rev=koRevealed(k);
@@ -727,20 +727,19 @@ function verJogoKO(mid){
   const round=koRound(mid);
   const lbl=(KO_VIEW.find(x=>x[0]===round)||['','Mata-mata'])[1];
   if(!koRevealed(round)) return `<div class="banner warn">Os palpites desta rodada ficam visíveis após o fechamento dela.</div>`;
+  const slot=(officialKoMatchups()[round]||[]).find(s=>s.id===mid)||{};
   const r=officialResults[mid];
   const linhas=[];
   allParticipants.forEach(p=>{
-    const pr={}; allPreds.filter(x=>x.participant_id===p.id).forEach(x=>pr[x.match_id]=x);
-    const slot=(koMatchups(pr)[round]||[]).find(s=>s.id===mid);
-    const pred=pr[mid];
-    if(slot&&pred&&pred.home_goals!=null&&pred.away_goals!=null) linhas.push({name:p.name,home:slot.home,away:slot.away,hg:pred.home_goals,ag:pred.away_goals});
+    const pred=allPreds.find(x=>x.participant_id===p.id&&x.match_id===mid);
+    if(pred&&pred.home_goals!=null&&pred.away_goals!=null) linhas.push({name:p.name,hg:pred.home_goals,ag:pred.away_goals});
   });
-  let html=`<div class="card"><div class="card-h">${lbl}${r?` · oficial ${r.home_goals}×${r.away_goals}`:''}</div>`;
+  let html=`<div class="card"><div class="card-h">${slot.home||'?'} × ${slot.away||'?'} <span style="margin-left:auto;font-size:11px;color:var(--muted)">${lbl}</span>${r?` · oficial ${r.home_goals}×${r.away_goals}`:''}</div>`;
   if(!linhas.length) html+=`<div class="row" style="font-size:13px;color:var(--muted)">Ninguém palpitou este jogo.</div>`;
   linhas.sort((a,b)=>a.name.localeCompare(b.name,'pt'));
   linhas.forEach(x=>{
     const pt=r?pointsGame(x.hg,x.ag,r.home_goals,r.away_goals):null;
-    html+=`<div class="kogame"><div class="team home" style="font-size:12px">${x.name}</div><div class="score" style="font-weight:800;font-size:13px">${x.home||'?'} ${x.hg}×${x.ag} ${x.away||'?'}</div><div class="team away">${pt!=null?`<span class="pts ${pt?'':'zero'}">${pt} pts</span>`:''}</div></div>`;
+    html+=`<div class="match"><div class="team home">${x.name}</div><div class="score" style="font-weight:800;font-size:16px">${x.hg} × ${x.ag}</div><div class="team away">${pt!=null?`<span class="pts ${pt?'':'zero'}">${pt} pts</span>`:''}</div></div>`;
   });
   html+=`</div>`;
   return html;
